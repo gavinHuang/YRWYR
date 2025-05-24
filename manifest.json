@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "History Calendar Visualizer",
+  "version": "0.1.0",
+  "description": "Visualizes browsing history on a calendar with topic theming.",
+  "permissions": [
+    "history",
+    "storage",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open History Calendar",
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+} 

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>History Calendar</title>
+  <link rel="stylesheet" type="text/css" href="styles.css">
+  <!-- FullCalendar CSS is bundled with the JS below -->
+</head>
+<body>
+  <h1>Browsing History Calendar</h1>
+  <div id="calendar-container"></div>
+
+  <!-- FullCalendar JS -->
+  <script src='lib/fullcalendar/main.min.js'></script>
+  <script src="history_calendar.js"></script>
+
+  <!-- Modal Structure -->
+  <div id="eventModal" class="modal">
+    <div class="modal-content">
+      <span class="close-button">&times;</span>
+      <h2 id="modalDate"></h2>
+      <h3>Topics:</h3>
+      <ul id="modalTopicsList"></ul>
+      <h3>Pages Visited:</h3>
+      <ul id="modalTitlesList"></ul>
+    </div>
+  </div>
+</body>
+</html> 
