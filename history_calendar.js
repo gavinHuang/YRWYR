@@ -1,7 +1,8 @@
 console.log("History Calendar script loaded.");
 
 let calendarInstance = null;
-const fetchedYearMonths = new Set(); // Stores "YYYY-MM" of fetched months
+const fetchedDayData = {}; // Stores "YYYY-MM-DD" (local) -> [historyItems] for fetched days
+const fetchLocks = new Set(); // Stores "YYYY-MM-DD" (local) for days currently being fetched
 const topicColors = {}; // To store topic-color mappings
 let colorIndex = 0;   // To cycle through predefinedColors
 
@@ -25,7 +26,7 @@ const stopWords = new Set([
     'these', 'they', 'this', 'those', 'through', 'too', 'under', 'until', 'up', 'very',
     'we', 'what', 'when', 'where', 'which', 'while', 'who', 'whom', 'why', 'you',
     'your', 'yours', 'yourself', 'yourselves', '-', '|', 'google search', 'youtube',
-    'facebook', 'twitter', 'instagram', 'amazon', 'wikipedia', 'new tab', 'homepage', 'reddit'
+    'facebook', 'twitter', 'instagram', 'amazon', 'wikipedia', 'new tab', 'homepage', 'reddit', 'home', 'login'
 ]);
 
 // Placeholder for user-defined rules - later this would be loaded from chrome.storage
@@ -94,6 +95,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // Gracefully continue without modal functionality if elements are missing
     }
 
+    // Ensure calendarInstance is available for updateCalendarWithEvents if called early
+    // Though typically it's called after initial render and data fetch.
+
     loadUserDefinedRules(); // Load rules
 
     calendarInstance = new FullCalendar.Calendar(calendarEl, {
@@ -103,21 +107,32 @@ document.addEventListener('DOMContentLoaded', function() {
             center: 'title',
             right: 'dayGridMonth,timeGridWeek,timeGridDay'
         },
+        eventDisplay: 'block',
+        eventDidMount: function(info) {
+            info.el.style.marginTop = '5px';
+            info.el.style.marginBottom = '5px';
+            info.el.style.overflow = 'hidden';
+            info.el.style.textOverflow = 'ellipsis';
+            info.el.style.lineHeight = '1.2';
+            info.el.style.padding = '8px 4px';
+        },
         events: [],
         datesSet: function(dateInfo) {
-            const prefetchStartDate = new Date(dateInfo.start.getFullYear(), dateInfo.start.getMonth() - 1, 1);
-            fetchHistoryForDateRange(prefetchStartDate, dateInfo.end);
+            console.log("[Debug] datesSet triggered. View range:", dateInfo.start, dateInfo.end);
+            // For day-by-day, we fetch a rolling window around today, 
+            // or ensure the current view's days are covered if more relevant.
+            // For now, let's just always fetch the last 90 days from today.
+            // const today = new Date();
+            // fetchHistoryForLastNDays(90, today); // Fetch last 90 days from today - REMOVED based on user feedback
+            console.log("[Debug] datesSet: History fetching on navigation is now disabled. Displaying initially fetched data.");
         },
         eventClick: function(info) {
-            if (!eventModal) return; 
-
+            if (!eventModal) return;
             const date = info.event.start;
             const topics = info.event.extendedProps.topicsDetail;
-            const pages = info.event.extendedProps.pages; // Changed from titles to pages
-
-            modalDateElem.textContent = date.toDateString(); 
-
-            modalTopicsListElem.innerHTML = ''; 
+            const pages = info.event.extendedProps.pages;
+            modalDateElem.textContent = date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); // More readable date
+            modalTopicsListElem.innerHTML = '';
             if (topics && Object.keys(topics).length > 0) {
                 for (const topic in topics) {
                     const listItem = document.createElement('li');
@@ -127,27 +142,29 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 modalTopicsListElem.innerHTML = '<li>No specific topics identified.</li>';
             }
-
-            modalTitlesListElem.innerHTML = ''; // Clear previous titles/links
+            modalTitlesListElem.innerHTML = '';
             if (pages && pages.length > 0) {
                 pages.forEach(page => {
                     const listItem = document.createElement('li');
                     const link = document.createElement('a');
                     link.href = page.url;
                     link.textContent = page.title || 'No Title (Link)';
-                    link.target = '_blank'; // Open in new tab
-                    link.rel = 'noopener noreferrer'; // Security best practice for target="_blank"
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
                     listItem.appendChild(link);
                     modalTitlesListElem.appendChild(listItem);
                 });
             } else {
                 modalTitlesListElem.innerHTML = '<li>No page details recorded for this day.</li>';
             }
-
             eventModal.style.display = 'block';
         }
     });
     calendarInstance.render();
+
+    // Initial fetch on load
+    const today = new Date();
+    fetchHistoryForLastNDays(90, today);
 
     // Modal close functionality
     if (closeModalButton) {
@@ -162,71 +179,106 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-function getYearMonthString(date) {
+// Helper function to get YYYY-MM-DD in local timezone
+function getLocalDateString(date) { 
     const year = date.getFullYear();
-    const month = (date.getMonth() + 1).toString().padStart(2, '0'); // getMonth is 0-indexed
-    return `${year}-${month}`;
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
 }
 
-async function fetchHistoryForDateRange(rangeStart, rangeEnd) {
-    let currentMonthIterDate = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+// Adapted to update calendar by individual day event sources
+function updateCalendarWithDailyEvent(localDateStr, itemsToProcess) {
+    console.log(`[Debug] updateCalendarWithDailyEvent: START for ${localDateStr}. Items to process: ${itemsToProcess ? itemsToProcess.length : '0'}.`);
 
-    while (currentMonthIterDate <= rangeEnd) {
-        const year = currentMonthIterDate.getFullYear();
-        const month = currentMonthIterDate.getMonth(); // 0-indexed month
-        const yearMonthStr = getYearMonthString(new Date(year, month, 1));
-
-        if (!fetchedYearMonths.has(yearMonthStr)) {
-            // Add to set immediately to prevent re-fetching during async operation
-            fetchedYearMonths.add(yearMonthStr); 
-            console.log(`Fetching history for month: ${yearMonthStr}`);
-            await fetchHistoryForSingleMonth(year, month); 
-        } else {
-            // console.log(`Month ${yearMonthStr} already fetched or is being fetched.`);
-        }
-        currentMonthIterDate.setMonth(currentMonthIterDate.getMonth() + 1);
+    if (!calendarInstance) {
+        console.warn("[Debug] updateCalendarWithDailyEvent: calendarInstance is not available for ${localDateStr}.");
+        return;
     }
+
+    const existingSource = calendarInstance.getEventSourceById(localDateStr);
+    if (existingSource) {
+        console.log(`[Debug] updateCalendarWithDailyEvent: Found existing event source ID ${localDateStr}. Removing.`);
+        existingSource.remove();
+    } else {
+        console.log(`[Debug] updateCalendarWithDailyEvent: No existing event source found for ID ${localDateStr}.`);
+    }
+
+    if (!itemsToProcess || itemsToProcess.length === 0) {
+        console.log(`[Debug] updateCalendarWithDailyEvent: No items to process for ${localDateStr}. Day will be empty.`);
+        return;
+    }
+    
+    console.log(`[Debug] updateCalendarWithDailyEvent: Calling processHistoryForCalendar for ${localDateStr} with ${itemsToProcess.length} items.`);
+    const dailyEvents = processHistoryForCalendar(itemsToProcess, localDateStr);
+    
+    if (dailyEvents.length > 0) {
+        console.log(`[Debug] updateCalendarWithDailyEvent: Adding new event source ID ${localDateStr} with ${dailyEvents.length} event(s). Event titles: ${dailyEvents.map(e=>e.title).join(', ')}`);
+        calendarInstance.addEventSource({ events: dailyEvents, id: localDateStr }); 
+    } else {
+        console.log(`[Debug] updateCalendarWithDailyEvent: No events generated by processHistoryForCalendar for ${localDateStr}.`);
+    }
+    console.log(`[Debug] updateCalendarWithDailyEvent: END for ${localDateStr}.`);
 }
 
-async function fetchHistoryForSingleMonth(year, month) { // month is 0-indexed
-    const startDate = new Date(year, month, 1);
-    startDate.setHours(0, 0, 0, 0); // Ensure start of day
-    const endDate = new Date(year, month + 1, 0); // Day 0 of next month = last day of current month
-    endDate.setHours(23, 59, 59, 999); // Set to end of the day
+// New: Fetches history for the last N days ending on `endDate` (inclusive)
+async function fetchHistoryForLastNDays(numDays, endDateLocal) {
+    console.log(`[Debug] fetchHistoryForLastNDays: Fetching for last ${numDays} days, ending ${getLocalDateString(endDateLocal)}`);
+    const promises = [];
+    for (let i = 0; i < numDays; i++) {
+        const targetDate = new Date(endDateLocal);
+        targetDate.setDate(endDateLocal.getDate() - i);
+        const localDateStr = getLocalDateString(targetDate);
 
-    const yearMonthStr = getYearMonthString(startDate);
-    console.log(`[Debug] Querying for month: ${yearMonthStr}`);
-    console.log(`[Debug] Start Date: ${startDate.toString()}, Milliseconds: ${startDate.getTime()}`);
-    console.log(`[Debug] End Date: ${endDate.toString()}, Milliseconds: ${endDate.getTime()}`);
+        if (fetchedDayData.hasOwnProperty(localDateStr)) {
+            console.log(`[Debug] fetchHistoryForLastNDays: Using cached data for ${localDateStr}. Triggering update.`);
+            updateCalendarWithDailyEvent(localDateStr, fetchedDayData[localDateStr]);
+        } else if (!fetchLocks.has(localDateStr)) {
+            // console.log(`[Debug] fetchHistoryForLastNDays: Initiating fetch for new day: ${localDateStr}`);
+            promises.push(fetchHistoryForSingleDay(targetDate));
+        }
+    }
+    await Promise.all(promises);
+    console.log(`[Debug] fetchHistoryForLastNDays: All fetches for the ${numDays}-day window initiated or using cache.`);
+}
+
+// New: Fetches history for a single specific local day
+async function fetchHistoryForSingleDay(localDate) {
+    const localDateStr = getLocalDateString(localDate);
+
+    if (fetchLocks.has(localDateStr)) {
+        console.log(`[Debug] fetchHistoryForSingleDay: Fetch already in progress for ${localDateStr}. Skipping.`);
+        return; 
+    }
+
+    fetchLocks.add(localDateStr);
+    console.log(`[Debug] fetchHistoryForSingleDay: LOCKING and querying Chrome history for day: ${localDateStr}`);
+
+    const startTime = new Date(localDate);
+    startTime.setHours(0, 0, 0, 0); 
+    const endTime = new Date(localDate);
+    endTime.setHours(23, 59, 59, 999);
 
     return new Promise((resolve) => {
         chrome.history.search(
             {
                 text: '',
-                startTime: startDate.getTime(),
-                endTime: endDate.getTime(),
-                maxResults: 100000 // Increased maxResults for per-month query
+                startTime: startTime.getTime(), // UTC milliseconds
+                endTime: endTime.getTime(),     // UTC milliseconds
+                maxResults: 10000 // Max results for a single day query
             },
             function(historyItems) {
                 if (chrome.runtime.lastError) {
-                    console.error(`Error fetching history for ${yearMonthStr}:`, chrome.runtime.lastError.message);
-                    fetchedYearMonths.delete(yearMonthStr); // Allow re-fetching on error
-                    resolve();
-                    return;
+                    console.error(`[Debug] fetchHistoryForSingleDay: Error fetching for ${localDateStr}:`, chrome.runtime.lastError.message);
+                    delete fetchedDayData[localDateStr]; 
+                    updateCalendarWithDailyEvent(localDateStr, []); // Clear events on error
+                } else {
+                    console.log(`[Debug] fetchHistoryForSingleDay: Fetched ${historyItems.length} items for ${localDateStr}.`);
+                    fetchedDayData[localDateStr] = historyItems;
+                    updateCalendarWithDailyEvent(localDateStr, historyItems);
                 }
-
-                console.log(`Fetched ${historyItems.length} items for ${yearMonthStr}.`);
-
-                if (historyItems.length === 0) {
-                    // console.log(`No history items found for ${yearMonthStr}.`);
-                    resolve();
-                    return;
-                }
-                
-                const newEvents = processHistoryForCalendar(historyItems);
-                if (newEvents.length > 0 && calendarInstance) {
-                    calendarInstance.addEventSource(newEvents);
-                }
+                fetchLocks.delete(localDateStr);
+                console.log(`[Debug] fetchHistoryForSingleDay: UNLOCKING for ${localDateStr}.`);
                 resolve();
             }
         );
@@ -261,12 +313,13 @@ function getTopicFromTitle(title, url) {
     return words.slice(0, 2).join(' '); // Concatenate first two significant words
 }
 
-function processHistoryForCalendar(historyItems) {
+function processHistoryForCalendar(historyItems, debugDateStr = "N/A") { 
     const activityByDate = {};
+    console.log(`[Debug] processHistoryForCalendar: START for ${debugDateStr}. Processing ${historyItems.length} items.`);
 
     historyItems.forEach(item => {
-        const date = new Date(item.lastVisitTime);
-        const dateString = date.toISOString().split('T')[0];
+        const date = new Date(item.lastVisitTime); // item.lastVisitTime is ms from epoch (UTC)
+        const dateString = getLocalDateString(date); // Use local date string for grouping
         const topic = getTopicFromTitle(item.title, item.url);
 
         if (!activityByDate[dateString]) {
@@ -296,9 +349,17 @@ function processHistoryForCalendar(historyItems) {
         }
     });
 
+    // Log the aggregated activity for the day before creating event objects
+    if(activityByDate[debugDateStr]){
+        console.log(`[Debug] processHistoryForCalendar: Aggregated data for ${debugDateStr}:`, JSON.parse(JSON.stringify(activityByDate[debugDateStr])));
+    } else {
+        console.log(`[Debug] processHistoryForCalendar: No activity found for exact date ${debugDateStr} within the provided items. Activity keys:`, Object.keys(activityByDate));
+    }
+
     const calendarEvents = [];
-    for (const dateStr in activityByDate) {
-        const dayData = activityByDate[dateStr];
+    // STRICTLY process only the data for the expected debugDateStr
+    if (activityByDate.hasOwnProperty(debugDateStr)) {
+        const dayData = activityByDate[debugDateStr];
         let dominantTopic = 'general';
         let maxCount = 0;
         for (const topic in dayData.topics) {
@@ -309,8 +370,8 @@ function processHistoryForCalendar(historyItems) {
         }
 
         calendarEvents.push({
-            title: `Viewed ${dayData.count}p (${dominantTopic})`,
-            start: dateStr,
+            title: `${dominantTopic} (${dayData.count}p)`,
+            start: debugDateStr, // Ensure event start is the expected date
             allDay: true,
             backgroundColor: topicColors[dominantTopic] || '#cccccc',
             borderColor: topicColors[dominantTopic] || '#cccccc',
@@ -319,6 +380,15 @@ function processHistoryForCalendar(historyItems) {
                 topicsDetail: dayData.topics
             }
         });
+        console.log(`[Debug] processHistoryForCalendar: Successfully created event for expected date ${debugDateStr}.`);
+    } else if (Object.keys(activityByDate).length > 0) {
+        // This case means historyItems were passed, they were grouped by date, 
+        // but NONE of them matched the specific debugDateStr we were asked to process.
+        // This implies an upstream issue if items were expected for debugDateStr.
+        console.warn(`[Debug] processHistoryForCalendar: Activity found for other dates (${Object.keys(activityByDate).join(', ')}), but NOT for the expected date ${debugDateStr}. No event created for ${debugDateStr}.`);
     }
+    // The old loop `for (const dateStrKeyInActivity in activityByDate)` is removed to enforce processing only debugDateStr.
+
+    console.log(`[Debug] processHistoryForCalendar: END for ${debugDateStr}. Generated ${calendarEvents.length} calendar event objects.`);
     return calendarEvents;
 } 
