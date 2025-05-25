@@ -1,0 +1,4 @@
+I need to build a chrome plugin that uses chrome browser history (chrome://history/) as data source.
+the goal is to build a calendar to view what topic/theme was historical reading about.
+the topic/theme should be able to show on the calendar with color code to dfferentiate with each other.
+before write the code, please make a plan for me, listing steps and potential limitation

@@ -179,6 +179,18 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// Function to determine text color (black or white) based on background hex color
+function getContrastColor(hexColor) {
+    if (!hexColor) return '#000000'; // Default to black if no color provided
+    const hex = hexColor.replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    // Calculate YIQ (luminance)
+    const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+    return (yiq >= 128) ? '#000000' : '#FFFFFF'; // Return black for light backgrounds, white for dark
+}
+
 // Helper function to get YYYY-MM-DD in local timezone
 function getLocalDateString(date) { 
     const year = date.getFullYear();
@@ -304,13 +316,31 @@ function getTopicFromTitle(title, url) {
         }
     }
 
-    // 2. Default topic extraction (first 1-2 significant words)
-    const words = lowerTitle.split(/[^a-zA-Z0-9]+/) 
-      .filter(word => word.length > 2 && !stopWords.has(word) && !/^[0-9]+$/.test(word));
-    
-    if (words.length === 0) return 'general';
-    if (words.length === 1) return words[0];
-    return words.slice(0, 2).join(' '); // Concatenate first two significant words
+    // 2. Default topic extraction
+    let significantWords = [];
+
+    if (lowerTitle) {
+        // Regex to match sequences of CJK characters or sequences of Latin alphanumeric characters
+        const potentialWords = lowerTitle.match(/[\u4E00-\u9FFF]+|[a-zA-Z0-9]+/g) || [];
+
+        for (const word of potentialWords) {
+            if (/[\u4E00-\u9FFF]/.test(word)) { // Check if the word segment contains CJK characters
+                // For CJK segments, we are more lenient with length.
+                // Consider Chinese words of 1 or more characters as potentially significant.
+                if (word.length >= 1) {
+                    significantWords.push(word);
+                }
+            } else { // For Latin alphanumeric segments, apply original filters
+                if (word.length > 2 && !stopWords.has(word) && !/^[0-9]+$/.test(word)) {
+                    significantWords.push(word);
+                }
+            }
+        }
+    }
+
+    if (significantWords.length === 0) return 'general';
+    if (significantWords.length === 1) return significantWords[0];
+    return significantWords.slice(0, 2).join(' '); // Concatenate first two significant words
 }
 
 function processHistoryForCalendar(historyItems, debugDateStr = "N/A") { 
@@ -369,12 +399,16 @@ function processHistoryForCalendar(historyItems, debugDateStr = "N/A") {
             }
         }
 
+        const bgColor = topicColors[dominantTopic] || '#cccccc';
+        const textColor = getContrastColor(bgColor);
+
         calendarEvents.push({
             title: `${dominantTopic} (${dayData.count}p)`,
             start: debugDateStr, // Ensure event start is the expected date
             allDay: true,
-            backgroundColor: topicColors[dominantTopic] || '#cccccc',
-            borderColor: topicColors[dominantTopic] || '#cccccc',
+            backgroundColor: bgColor,
+            borderColor: bgColor, // Keep border same as background for a solid look
+            textColor: textColor, // Set text color for contrast
             extendedProps: {
                 pages: dayData.pages,
                 topicsDetail: dayData.topics
